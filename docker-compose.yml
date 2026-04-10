@@ -1,0 +1,6 @@
+services:
+  mock-server:
+    build: .
+
+    deploy:
+      replicas: 3
