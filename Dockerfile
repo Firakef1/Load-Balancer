@@ -1,15 +1,13 @@
-
 FROM node:18-alpine
 
-WORKDIR /
+WORKDIR /app
 
-COPY package.json ./
+COPY package*.json ./
 
-COPY servers/server.js ./servers/
+RUN npm install
+
+COPY . .
 
 EXPOSE 8080
 
 CMD ["node", "servers/server.js"]
-
-
-

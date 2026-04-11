@@ -1,6 +1,22 @@
 services:
-  mock-server:
+  proxy:
     build: .
+    command: node reverse_proxy.js
+    ports:
+      - "5000:5000"
+    networks:
+      - private-link
+    depends_on:
+      - mock-backend
 
+  mock-backend:
+    build: .
+    command: node servers/server.js
     deploy:
       replicas: 3
+    networks:
+      - private-link
+
+networks:
+  private-link:
+    driver: bridge
