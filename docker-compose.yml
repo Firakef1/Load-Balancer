@@ -8,6 +8,8 @@ services:
       - private-link
     depends_on:
       - mock-backend
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
   mock-backend:
     build: .

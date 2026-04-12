@@ -19,6 +19,7 @@
   },
   "homepage": "https://github.com/Firakef1/Load-Balancer#readme",
   "dependencies": {
-    "http-proxy": "^1.18.1"
+    "http-proxy": "^1.18.1",
+    "dockerode": "^4.0.10"
   }
 }
