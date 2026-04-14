@@ -18,62 +18,97 @@ async function refreshBackends() {
 
     healthyBackends = matches
       .map((c) => {
-        const networks = c.NetworkSettings.Networks;
-        const firstNetwork = Object.keys(networks)[0];
-        const ip = networks[firstNetwork]?.IPAddress;
-        return ip ? `http://${ip}:8080` : null;
+        const name = c.Names[0].replace("/", "");
+        return {
+          id: name,
+          url: `http://${name}:8080`,
+        };
       })
       .filter(Boolean);
 
-    console.log(
-      `[Health Check] Active: ${healthyBackends.length}`,
-      healthyBackends,
-    );
+    // console.log("Active Backends:", healthyBackends);
   } catch (err) {
     console.error("Docker Socket Error:", err.message);
   }
 }
 
+//check the available containers every 10 seconds
 setInterval(refreshBackends, 10000);
 refreshBackends();
 
-const server = http.createServer((req, res) => {
-  if (healthyBackends.length === 0) {
-    res.writeHead(503);
-    return res.end("Service Unavailable: No healthy backends.");
+function getTargetUrl(startOffset, retries) {
+  const index = (startOffset + retries) % healthyBackends.length;
+  return healthyBackends[index];
+}
+
+function removeFailedBackend(target) {
+  healthyBackends = healthyBackends.filter((s) => s.url !== target.url);
+}
+
+function sendErrorResponse(res, statusCode, message) {
+  if (!res.headersSent) {
+    res.writeHead(statusCode);
+    res.end(message);
+  }
+}
+function attemptProxy(req, res, startOffset, retries) {
+  // 1. Fix Regex: Remove quotes to make it a real RegExp object
+  const cookies = req.headers.cookie || "";
+  const match = cookies.match(/SERVERID=([^;]+)/);
+  const cookieServerId = match ? match[1] : null;
+
+  // 2. Logic: Try to find the "Stuck" server first, otherwise use Load Balancer
+  let target;
+  if (cookieServerId && retries === 0) {
+    target = healthyBackends.find((s) => s.id === cookieServerId);
   }
 
-  const startOffset = requestCounter++ % healthyBackends.length;
-
-  const attemptProxy = (retries) => {
-    if (retries >= healthyBackends.length) {
-      if (!res.headersSent) {
-        res.writeHead(502);
-        res.end("Bad Gateway: All backends failed.");
-      }
-      return;
+  // If no cookie or the "stuck" server is dead, get the next available one
+  if (!target) {
+    if (retries >= healthyBackends.length || healthyBackends.length === 0) {
+      return sendErrorResponse(res, 502, "No healthy backends.");
     }
+    target = getTargetUrl(startOffset, retries);
+  }
 
-    const targetIndex = (startOffset + retries) % healthyBackends.length;
-    const target = healthyBackends[targetIndex];
+  // 3. Set the cookie so the user "sticks" to this specific target
+  res.setHeader("Set-Cookie", `SERVERID=${target.id}; Path=/; HttpOnly`);
 
-    proxy.web(req, res, { target }, (err) => {
-      console.error(`Failover: ${target} unreachable. trying next...`);
-      healthyBackends = healthyBackends.filter((url) => url !== target);
-      attemptProxy(retries + 1);
-    });
-  };
+  proxy.web(req, res, { target: target.url }, (err) => {
+    console.error(`[Failover] ${target.id} failed.`);
+    removeFailedBackend(target);
 
-  attemptProxy(0);
+    // Use the 'res' passed into attemptProxy
+    if (!res.headersSent) {
+      attemptProxy(req, res, startOffset, retries + 1);
+    }
+  });
+}
+
+const server = http.createServer((req, res) => {
+  console.log(`[Server] Incoming request: ${req.url}`);
+
+  //check if there is no health server
+  if (healthyBackends.length === 0) {
+    return sendErrorResponse(
+      res,
+      503,
+      "Service Unavailable: No backends found.",
+    );
+  }
+
+  //round robin task assignment
+  const startOffset = requestCounter++ % healthyBackends.length;
+  attemptProxy(req, res, startOffset, 0);
 });
 
 proxy.on("error", (err, req, res) => {
+  console.error("[Proxy Error]", err.message);
   if (!res.headersSent) {
-    res.writeHead(502);
-    res.end("Proxy Connection Error");
+    sendErrorResponse(res, 502, "Proxy Connection Error");
   }
 });
 
-server.listen(5000, () => {
+server.listen(5000, "0.0.0.0", () => {
   console.log("Load Balancer active on port 5000");
 });
